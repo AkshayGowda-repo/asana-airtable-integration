@@ -14,6 +14,27 @@ const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
 const AIRTABLE_TABLE_NAME = "Asana Tasks";
 
+const taskExistsInAirtable = async (taskId) => {
+  try {
+    const response = await axios.get(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
+      {
+        headers: {
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+        },
+        params: {
+          filterByFormula: `{Task ID} = '${taskId}'`,
+        },
+      }
+    );
+
+    return response.data.records.length > 0;
+  } catch (error) {
+    console.error("Error checking task in Airtable:", error);
+    return false;
+  }
+};
+
 // Endpoint to handle Asana webhook events
 app.post("/webhook", async (req, res) => {
   const event = req.body.events[0];
@@ -33,32 +54,41 @@ app.post("/webhook", async (req, res) => {
       );
 
       const task = taskResponse.data.data;
-      console.log(task);
+      console.log("Fetched task from Asana:", task);
 
-      // Prepare data for Airtable
-      const airtableData = {
-        fields: {
-          "Task ID": task.gid,
-          Name: task.name,
-          Assignee: task.assignee ? task.assignee.name : "Unassigned",
-          "Due Date": task.due_on || "No Due Date",
-          Description: task.notes || "No Description",
-        },
-      };
+      // Check if the task already exists in Airtable
+      const exists = await taskExistsInAirtable(task.gid);
 
-      // Create a new record in Airtable
-      await axios.post(
-        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
-        airtableData,
-        {
-          headers: {
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-            "Content-Type": "application/json",
+      if (!exists) {
+        const airtableData = {
+          fields: {
+            "Task ID": task.gid,
+            Name: task.name,
+            Assignee: task.assignee ? task.assignee.name : "Unassigned",
+            "Due Date": task.due_on || "No Due Date",
+            Description: task.notes || "No Description",
           },
-        }
-      );
+        };
 
-      res.status(200).send("Task copied to Airtable");
+        console.log("Data to be sent to Airtable:", airtableData);
+
+        // Create a new record in Airtable
+        await axios.post(
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
+          airtableData,
+          {
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        res.status(200).send("Task copied to Airtable");
+      } else {
+        console.log("Task already exists in Airtable:", task.gid);
+        res.status(200).send("Task already exists in Airtable");
+      }
     } catch (error) {
       console.error("Error copying task to Airtable:", error);
       res.status(500).send("Internal Server Error");
