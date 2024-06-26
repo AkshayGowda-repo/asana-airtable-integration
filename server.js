@@ -1,13 +1,16 @@
 require("dotenv").config();
-
+const cors = require("cors");
 const express = require("express");
 const crypto = require("crypto");
+const ngrok = require("@ngrok/ngrok");
+
 const { getAsanaTask } = require("./fetch");
 const { dataToAirtable } = require("./airtablePopulate");
 
 const app = express();
 
 app.use(express.json());
+app.use(cors());
 
 let secret = "";
 
@@ -15,9 +18,9 @@ let events = [];
 
 app.post("/receiveWebhook", (req, res, next) => {
   if (req.headers["x-hook-secret"]) {
-    //console.log("This is a new webhook");
+    console.log("This is a new webhook");
     secret = req.headers["x-hook-secret"];
-    //console.log(secret)
+    console.log(secret);
     res.setHeader("X-Hook-Secret", secret);
     res.sendStatus(200);
   } else if (req.headers["x-hook-signature"]) {
@@ -49,7 +52,7 @@ app.post("/receiveWebhook", (req, res, next) => {
           let data_for_airtable = {};
           try {
             if (task) {
-              // console.log('Task details:', task.data);
+              console.log("Task details:", task.data);
               data_for_airtable["taskID"] = task.data["gid"];
               data_for_airtable["name"] = task.data["name"];
               data_for_airtable["assignee"] = task.data["assignee"]["name"];
@@ -87,6 +90,10 @@ app.post("/receiveWebhook", (req, res, next) => {
 app.get("/", (req, res) => {
   res.send("Hi Akshay>> ");
 });
+
+// ngrok
+//   .connect({ addr: 8080, authtoken_from_env: true })
+//   .then((listener) => console.log(`Ingress established at: ${listener.url()}`));
 
 app.listen(8080, () => {
   console.log(`Server started on port 8080.......`);
