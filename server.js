@@ -1,108 +1,93 @@
 require("dotenv").config();
 
 const express = require("express");
-const bodyParser = require("body-parser");
-const axios = require("axios");
+const crypto = require("crypto");
+const { getAsanaTask } = require("./fetch");
+const { dataToAirtable } = require("./airtablePopulate");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(bodyParser.json());
+app.use(express.json());
 
-const ASANA_PAT = process.env.ASANA_PAT;
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
-const AIRTABLE_TABLE_NAME = "Asana Tasks";
+let secret = "";
 
-const taskExistsInAirtable = async (taskId) => {
-  try {
-    const response = await axios.get(
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
-      {
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        },
-        params: {
-          filterByFormula: `{Task ID} = '${taskId}'`,
-        },
-      }
-    );
+let events = [];
 
-    return response.data.records.length > 0;
-  } catch (error) {
-    console.error("Error checking task in Airtable:", error);
-    return false;
-  }
-};
+app.post("/receiveWebhook", (req, res, next) => {
+  if (req.headers["x-hook-secret"]) {
+    //console.log("This is a new webhook");
+    secret = req.headers["x-hook-secret"];
+    //console.log(secret)
+    res.setHeader("X-Hook-Secret", secret);
+    res.sendStatus(200);
+  } else if (req.headers["x-hook-signature"]) {
+    const computedSignature = crypto
+      .createHmac("SHA256", secret)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
 
-// Endpoint to handle Asana webhook events
-app.post("/webhook", async (req, res) => {
-  const event = req.body.events[0];
+    if (
+      !crypto.timingSafeEqual(
+        Buffer.from(req.headers["x-hook-signature"]),
+        Buffer.from(computedSignature)
+      )
+    ) {
+      // Fail
+      res.sendStatus(401);
+    } else {
+      // Success
 
-  if (event.resource_type === "task" && event.action === "added") {
-    const taskId = event.resource;
+      console.log(`Events on ${Date()}:`);
+      console.log(req.body.events);
 
-    // Fetch task details from Asana
-    try {
-      const taskResponse = await axios.get(
-        `https://app.asana.com/api/1.0/tasks/${taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${ASANA_PAT}`,
-          },
-        }
-      );
+      if (req.body.events.length > 0) {
+        const taskId = req.body.events[0]["resource"]["gid"];
 
-      const task = taskResponse.data.data;
-      console.log("Fetched task from Asana:", task);
+        console.log("events array>>>>>>>", events);
+        getAsanaTask(taskId).then((task) => {
+          console.log("task>>>>>>>>", task);
+          let data_for_airtable = {};
+          try {
+            if (task) {
+              // console.log('Task details:', task.data);
+              data_for_airtable["taskID"] = task.data["gid"];
+              data_for_airtable["name"] = task.data["name"];
+              data_for_airtable["assignee"] = task.data["assignee"]["name"];
+              data_for_airtable["dueDate"] = task.data["due_on"];
+              data_for_airtable["description"] = task.data["notes"];
+            }
 
-      // Check if the task already exists in Airtable
-      const exists = await taskExistsInAirtable(task.gid);
-
-      if (!exists) {
-        const airtableData = {
-          fields: {
-            "Task ID": task.gid,
-            Name: task.name,
-            Assignee: task.assignee ? task.assignee.name : "Unassigned",
-            "Due Date": task.due_on || "No Due Date",
-            Description: task.notes || "No Description",
-          },
-        };
-
-        console.log("Data to be sent to Airtable:", airtableData);
-
-        // Create a new record in Airtable
-        await axios.post(
-          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
-          airtableData,
-          {
-            headers: {
-              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
+            if (!events.includes(taskId)) {
+              console.log("airtable data>>>>>>", data_for_airtable);
+              setTimeout(() => {
+                dataToAirtable(
+                  data_for_airtable["taskID"],
+                  data_for_airtable["name"],
+                  data_for_airtable["assignee"],
+                  data_for_airtable["dueDate"],
+                  data_for_airtable["description"]
+                );
+              }, 20000);
+              events.push(taskId);
+              console.log("events array after event loop>>>>>>>", events);
+            }
+          } catch (error) {
+            console.error("Error:", error);
           }
-        );
-
-        res.status(200).send("Task copied to Airtable");
-      } else {
-        console.log("Task already exists in Airtable:", task.gid);
-        res.status(200).send("Task already exists in Airtable");
+        });
       }
-    } catch (error) {
-      console.error("Error copying task to Airtable:", error);
-      res.status(500).send("Internal Server Error");
+      console.log(">>reached here");
+      res.sendStatus(200);
     }
   } else {
-    res.status(200).send("Event ignored");
+    console.error("Something went wrong!");
   }
 });
 
-// Endpoint to verify Asana webhook setup
-app.head("/webhook", (req, res) => {
-  res.status(200).send("OK");
+app.get("/", (req, res) => {
+  res.send("Hi Akshay>> ");
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+app.listen(8080, () => {
+  console.log(`Server started on port 8080.......`);
 });
